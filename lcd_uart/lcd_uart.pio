@@ -1,0 +1,55 @@
+
+/*
+/  Inverted UART
+/  Want to send a UART signal with 1 low and standing low
+/  
+*/
+.program N_UART
+
+.side_set 1 opt
+
+
+.wrap_target
+    pull
+    set x, 7            side 1      [6] ; Should be 7, but some letters were picked up with first bit as a 1. So try this shortening this instead
+bitloop:
+    out pins, 1                     [6]
+    jmp x-- bitloop
+    nop                 side 0      [7]
+    nop                             [6]
+.wrap
+
+; .wrap_target
+;     pull
+;     set pins 1
+;     set x, 7            [6]
+; bitloop:
+;     out pins, 1         [6]
+;     jmp x-- bitloop
+;     set pins 0          [6]
+;     nop                 [7]
+; .wrap
+
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include <stdio.h>
+
+static inline void N_UART_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    pio_sm_config c = N_UART_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, false, 8);
+    sm_config_set_out_pins(&c, pin, 1);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    float div = clock_get_hz(clk_sys) / (freq * 8);
+    // printf("divisions: %f\n", div);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

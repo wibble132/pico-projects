@@ -1,0 +1,41 @@
+
+.program ws2812
+.side_set 1
+
+.define public T1 2
+.define public T2 5
+.define public T3 3
+
+
+loop:
+    out x, 1        side 0  [T3 - 1]
+    jmp !x do_zero     side 1  [T1 - 1]
+do_one:
+    jmp loop        side 1  [T2 - 1]
+do_zero:
+    jmp loop        side 0  [T2 - 1]
+
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
+    pio_gpio_init(pio, pin);                            // Configure the pin for use by pio
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);          // Set the PIO pin direction of 1 pin starting at 1, to out
+
+    // Get the default configuration for this program (includes things such as .wrap and .side_set).
+    // This is then modified into the configuration we want
+    pio_sm_config c = ws2812_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);                // Set the sideset pin starting at pin (can have e.g. .side_set 3 to side set on 3 pins)
+    sm_config_set_out_shift(&c, false, true, 24);       // false -> shift_to_right, true -> autopull, 24 bits for each LED information
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);     // 
+
+    int cycles_per_bit = ws2812_T1 + ws2812_T2 + ws2812_T3; // Total cycles per bit (shows nice use of .define public)
+    float div = clock_get_hz(clk_sys) / (freq * cycles_per_bit); // slow the SM's execution down, based on sys clock and number of cycles to achieve the correct rate
+    sm_config_set_clkdiv(&c, div);                      // set the clock
+
+    pio_sm_init(pio, sm, offset, &c);               // load the configuration and go to the address offset
+    pio_sm_set_enabled(pio, sm, true);              // make it go!
+}
+
+%}
