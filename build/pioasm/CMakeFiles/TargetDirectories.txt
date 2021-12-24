@@ -1,3 +1,0 @@
-C:/Users/Dan/Documents/Programming/Pico/mypico/build/pioasm/CMakeFiles/pioasm.dir
-C:/Users/Dan/Documents/Programming/Pico/mypico/build/pioasm/CMakeFiles/edit_cache.dir
-C:/Users/Dan/Documents/Programming/Pico/mypico/build/pioasm/CMakeFiles/rebuild_cache.dir
