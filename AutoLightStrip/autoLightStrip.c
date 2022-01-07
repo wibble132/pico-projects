@@ -21,18 +21,34 @@
 
 // When the pio sensor detects someone, turn on the light strip
 
-// TODO use the second core to work out the pattern to be displayed
+// 0 - Block Colour
+// 1 - Rainbow?
+#define ACTIVE_PATTERN 0
+
+#define BLOCK_COLOUR 0xC0A08000
+
+
+// TODO use the second core to work out the pattern to be displayed 
+// -- Is this even worth it? Maybe if I have some complicated pattern that takes 2 'frames' to create the pattern
+//    But unlikely to be done
+//    What would the first core do in the wait time though?
+//    Maybe if each core does half of the light calculations?
+//    Seems like by that point you should just optimise a bit, or have a lower 'framerate'
+// -- Might want something completely different running on the other core, at which point you would
+//    want this to run on a single one?
 
 
 // Properties of phasing 
 // (the animation of the lights turning on and off)
 #define PHASING_DISTANCES 10         // MUST BE < 0xFF
 #define PHASING_OFFSET 3
-#define PHASING_PHASE_MAX 32
+#define PHASING_PHASE_MAX 64
 // #define PHASING_PHASE_MIN 0 // fixed
 #define PHASING_PHASE_STEP 1
 
 int dma_chan;
+// Used to ensure the reset delay is completed for WS2812 LED strip,
+// And slows down the patterns
 static semaphore_t reset_delay_complete_sem;
 
 static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
@@ -42,15 +58,41 @@ static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
             ((uint32_t) (b) <<  8);
 }
 
-#define BLOCK_COLOUR 0x00002000
+
+// TODO add more patterns
 void block_colour_pattern(uint32_t *pattern_array, uint len, uint t) {
     for (int i = 0; i < len; ++i) {
         pattern_array[i] = BLOCK_COLOUR;
     }
 }
 
-typedef void (*pattern)(uint32_t *light_array, uint len, uint t);
 
+static inline uint8_t colour_wheel(uint8_t pos) {
+    return pos < 85 ? urgb_u32(pos * 3, 255 - pos * 3, 0) :
+           pos < 170 ? urgb_u32(255 - (pos - 85) * 3, 0, (pos - 85) * 3):
+           urgb_u32(0, (pos - 170) * 3, 255 - (pos - 170) * 3);
+}
+void rainbow_pattern(uint32_t *pattern_array, uint len, uint t) {
+    for (int i = 0; i < len; ++i) {
+        pattern_array[i] = colour_wheel(t + i);
+    }
+}
+
+// TODO create an array of the patterns, and then choose a different once each time it turns on
+typedef void (*pattern)(uint32_t *light_array, uint len, uint t);
+const struct {
+    pattern pat;
+    const char* name;
+} pattern_table[] = {
+        {block_colour_pattern, "Solid Colour"},
+        {rainbow_pattern,      "Moving Rainbow!"},
+};
+
+
+
+// Scales the see-saw wave
+// x_M and t_M are the max values of x, t
+// See https://www.desmos.com/calculator/an3ayahnek for graph of what happens in these two functions
 static inline uint32_t phasing_f(uint32_t x, uint32_t t, uint32_t x_M, uint32_t t_M) {
     if ( t <= t_M / 2) {
         return ( (uint32_t)255 * 2 * t * x ) / ( x_M * t_M );
@@ -58,55 +100,20 @@ static inline uint32_t phasing_f(uint32_t x, uint32_t t, uint32_t x_M, uint32_t 
     return 255 - ( (uint32_t)255 * 2 * (t_M-t) * (x_M-x) ) / ( x_M * t_M );
 }
 
+// Scales a see-saw wave such that it looks cool.
+// Effect isn't that noticible and it kinda looks like it all fades in at once
 void add_phasing(uint32_t *phase_wave, uint32_t *pattern_array, uint32_t length, uint32_t phasing_status) {
-    //printf("%d: ", phasing_status);
     for (int i = 0; i < WS2812_LED_COUNT; ++i) {
         uint32_t x = phasing_f(phase_wave[i], phasing_status, PHASING_DISTANCES, PHASING_PHASE_MAX);
         uint32_t r = (pattern_array[i] >> 16) & 0xFF;
         uint32_t g = (pattern_array[i] >> 24) & 0xFF;
         uint32_t b = (pattern_array[i] >>  8) & 0xFF;
-        pattern_array[i] = urgb_u32( (x*r)/255, (x*g)/255, (x*b)/255 );
-        // if (phasing_status == 6) {
-        //     printf("x,t: %x,%x, f(x,t): %x, rgb: %x,%x,%x\n", phase_wave[i], phasing_status, x, r, g, b);
-        // }
-        // printf("%2x ", (b*x)/255);
+        pattern_array[i] = urgb_u32( (x*r) >> 12, (x*g) >> 12, (x*b) >> 12 );
+
     }
-    //printf("\n");
 }
 
-
-
-
-// int64_t startRead(alarm_id_t id, void *user_data) {
-//     dma_channel_set_read_addr(dma_chan, user_data, true);
-//     return 0;
-// }
-
-// void dma_handler() {
-//     static uint32_t light_array[WS2812_LED_COUNT][WS2812_LED_COUNT];
-//     static int lightCount = 0;
-//     // Clear the interrupt request
-//     dma_hw->ints0 = 1u << dma_chan;
-// 
-//     static bool first_run = true;
-//     static bool light_on = false;
-//     if (first_run) {
-//         first_run = false;
-//         for (int i = 0; i < WS2812_LED_COUNT; ++i) {
-//         // first i lights are red, rest are off
-//             for (int j = 0; j < WS2812_LED_COUNT; ++j) {
-//                 light_array[i][j] = urgb_u32(0, 0x10 * (j<=i), 0);
-//             }
-//         }
-//     }
-// 
-// 
-//     // Set the read address of the DMA, and trigger it to start
-//     add_alarm_in_ms(1000, startRead, &light_array[lightCount], true);
-// 
-//     lightCount = (lightCount + 1) % WS2812_LED_COUNT;
-// }
-
+// Time has passed, release the sem so more data can be sent to the lights
 int64_t release_reset_delay_sem(alarm_id_t id, void *user_data) {
     sem_release(&reset_delay_complete_sem);
     return 0;
@@ -118,7 +125,7 @@ int64_t release_reset_delay_sem(alarm_id_t id, void *user_data) {
 // Don't need to go that fast though, so use 500 for now.
 void new_dma_handler() { 
     dma_hw->ints0 = 1u << dma_chan;
-    add_alarm_in_ms(25, release_reset_delay_sem, NULL, true); 
+    add_alarm_in_ms(50, release_reset_delay_sem, NULL, true); 
 }
 
 
@@ -130,16 +137,16 @@ uint32_t difference( int32_t a, int32_t b) {
 
 // Main program
 int main() {
-    stdio_init_all();
+    // stdio_init_all();
 
     // The onboard LED is used for testing
-    gpio_init(25);
-    gpio_set_dir(25, GPIO_OUT);
-    gpio_put(25, 0);
+    // gpio_init(25);
+    // gpio_set_dir(25, GPIO_OUT);
+    // gpio_put(25, 0);
 
-    //
+    // Set up the pin for the PIR sensor. No more setup is needed for the PIR sensor, it just works
     gpio_init(PIR_GPIO_pin);
-    gpio_set_dir(25, PIR_GPIO_pin);
+    gpio_set_dir(PIR_GPIO_pin, GPIO_IN);
     gpio_pull_down(PIR_GPIO_pin);
 
     // PIO used for WS2812 LED strip
@@ -183,6 +190,7 @@ int main() {
     static uint32_t phasing_wave[WS2812_LED_COUNT];
     for (signed int i = 0; i < WS2812_LED_COUNT; ++i) {
         // ABS( MOD( x-x_0, 2x_M) - x_M ) gives a see-saw wave with required properties
+        // Used in the phasing functions
         phasing_wave[i] = difference( ( i + (PHASING_DISTANCES - PHASING_OFFSET) ) % (2 * PHASING_DISTANCES), PHASING_DISTANCES );
     }
 
@@ -195,7 +203,7 @@ int main() {
     // Do nothing forever here, everything else is handled with interrupts
     while (true) {
 
-        block_colour_pattern(pattern_array, WS2812_LED_COUNT, t);
+        pattern_table[ACTIVE_PATTERN].pat(pattern_array, WS2812_LED_COUNT, t);
 
         if (gpio_get(PIR_GPIO_pin)) {
             if (phasing_status < PHASING_PHASE_MAX)
@@ -207,7 +215,7 @@ int main() {
         add_phasing(phasing_wave, pattern_array, WS2812_LED_COUNT, phasing_status);
 
 
-        gpio_put(25, (t%2)!=0);
+        // gpio_put(25, (t%2)!=0);
 
         // Acquire a permit to confirm that there has been enough time since the last showing of lights
         sem_acquire_blocking(&reset_delay_complete_sem);
