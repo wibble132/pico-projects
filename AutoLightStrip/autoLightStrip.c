@@ -6,6 +6,7 @@
 #include "hardware/pio.h"
 #include "hardware/dma.h"
 #include "hardware/irq.h"
+#include "hardware/adc.h"
 
 #include "autoLightStrip.pio.h"
 
@@ -17,16 +18,16 @@
 #define WS2812_LED_COUNT 60
 // PIN 2  - GPIO1       - pir sensor
 #define PIR_GPIO_pin 1
-// PIN 30 - ADC0/GPIO25 - potentiometer   ---- Not to be implemented at first, brightness contro (or lights style?)
-
-// When the pio sensor detects someone, turn on the light strip
+// PIN 30 - ADC0/GPIO26 - potentiometer
+#define POTENTIOMETER_pin 26
+// When the pir sensor detects someone, turn on the light strip
 
 // 0 - Block Colour
 // 1 - Rainbow?
-#define ACTIVE_PATTERN 0
+#define ACTIVE_PATTERN 1
 
-#define BLOCK_COLOUR 0xC0A08000
-
+// #define BLOCK_COLOUR 0xC0A08000 // White
+#define BLOCK_COLOUR 0x08000000    // Green
 
 // TODO use the second core to work out the pattern to be displayed 
 // -- Is this even worth it? Maybe if I have some complicated pattern that takes 2 'frames' to create the pattern
@@ -37,14 +38,24 @@
 // -- Might want something completely different running on the other core, at which point you would
 //    want this to run on a single one?
 
+// TODO Button to change the pattern/style
+// TODO Display information on the LCD screen
+//     - Use second PIO to run the txuart for it
+//     - See .\lcd_uart\lcd_uart.c for basic example code
+//     - Display current style & brightness (2 rows :) )
+
+
 
 // Properties of phasing 
 // (the animation of the lights turning on and off)
-#define PHASING_DISTANCES 10         // MUST BE < 0xFF
+#define PHASING_DISTANCES 5         // MUST BE < 0xFF
 #define PHASING_OFFSET 3
 #define PHASING_PHASE_MAX 64
 // #define PHASING_PHASE_MIN 0 // fixed
 #define PHASING_PHASE_STEP 1
+
+
+#define MAX_BRIGHTNESS 0x20
 
 int dma_chan;
 // Used to ensure the reset delay is completed for WS2812 LED strip,
@@ -67,7 +78,7 @@ void block_colour_pattern(uint32_t *pattern_array, uint len, uint t) {
 }
 
 
-static inline uint8_t colour_wheel(uint8_t pos) {
+static inline uint32_t colour_wheel(uint8_t pos) {
     return pos < 85 ? urgb_u32(pos * 3, 255 - pos * 3, 0) :
            pos < 170 ? urgb_u32(255 - (pos - 85) * 3, 0, (pos - 85) * 3):
            urgb_u32(0, (pos - 170) * 3, 255 - (pos - 170) * 3);
@@ -103,13 +114,34 @@ static inline uint32_t phasing_f(uint32_t x, uint32_t t, uint32_t x_M, uint32_t 
 // Scales a see-saw wave such that it looks cool.
 // Effect isn't that noticible and it kinda looks like it all fades in at once
 void add_phasing(uint32_t *phase_wave, uint32_t *pattern_array, uint32_t length, uint32_t phasing_status) {
+    // const float conversion_factor = MAX_BRIGHTNESS / (1 << 12);
+    uint16_t adc_value = adc_read();
     for (int i = 0; i < WS2812_LED_COUNT; ++i) {
         uint32_t x = phasing_f(phase_wave[i], phasing_status, PHASING_DISTANCES, PHASING_PHASE_MAX);
         uint32_t r = (pattern_array[i] >> 16) & 0xFF;
         uint32_t g = (pattern_array[i] >> 24) & 0xFF;
         uint32_t b = (pattern_array[i] >>  8) & 0xFF;
-        pattern_array[i] = urgb_u32( (x*r) >> 12, (x*g) >> 12, (x*b) >> 12 );
 
+        // Scale by phasing value
+        r = (r * x) >> 8;
+        g = (g * x) >> 8;
+        b = (b * x) >> 8;
+
+        // Scale to brightness
+        // ACD is up to (1<<12) and brightness is up to (1<<8)
+        r = (r * adc_value * MAX_BRIGHTNESS) >> 20;
+        g = (g * adc_value * MAX_BRIGHTNESS) >> 20;
+        b = (b * adc_value * MAX_BRIGHTNESS) >> 20;
+
+        // r = (r > MAX_BRIGHTNESS) ? MAX_BRIGHTNESS : r;
+        // g = (g > MAX_BRIGHTNESS) ? MAX_BRIGHTNESS : g;
+        // b = (b > MAX_BRIGHTNESS) ? MAX_BRIGHTNESS : b;
+
+        // assert(r <= MAX_BRIGHTNESS);
+        // assert(g <= MAX_BRIGHTNESS);
+        // assert(b <= MAX_BRIGHTNESS);
+
+        pattern_array[i] = urgb_u32( r, g, b );
     }
 }
 
@@ -148,6 +180,10 @@ int main() {
     gpio_init(PIR_GPIO_pin);
     gpio_set_dir(PIR_GPIO_pin, GPIO_IN);
     gpio_pull_down(PIR_GPIO_pin);
+
+    adc_init();
+    adc_gpio_init(26);
+    adc_select_input(0);
 
     // PIO used for WS2812 LED strip
     PIO pio = pio0;
