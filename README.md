@@ -12,5 +12,7 @@ I wouldn't recommend running any of this without looking at what it does first. 
 ## AutoLightStrip
 
 This controls a WS2812b light strip, with a choice of patterns.
+
 The brightness can be controlled by a potentiometer.
+
 See code for configuration / pinouts etc.
