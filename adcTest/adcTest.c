@@ -4,7 +4,7 @@
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 
-const float MAXWAIT = 2000;
+const float MAXWAIT = 2000.0F;
 
 void sleepADCTime() {
     const float conversion_factor = MAXWAIT / (1<<12);
