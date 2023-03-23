@@ -1,6 +1,6 @@
 
 
-add_executable(auto_light_strip autoLightStrip.c)
+add_executable(auto_light_strip autoLightStrip.c colours.c)
 
 pico_generate_pio_header(auto_light_strip ${CMAKE_CURRENT_LIST_DIR}/autoLightStrip.pio )
 

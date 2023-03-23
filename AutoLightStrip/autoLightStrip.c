@@ -9,6 +9,7 @@
 #include "hardware/adc.h"
 
 #include "autoLightStrip.pio.h"
+#include "colours.h"
 
 // Pins used:
 
@@ -77,7 +78,7 @@
 // #define PHASING_PHASE_MIN 0 // fixed
 #define PHASING_PHASE_STEP 1
 
-#define MAX_BRIGHTNESS 0x40
+#define MAX_BRIGHTNESS 0xFF
 
 int dma_chan;
 // Used to ensure the reset delay is completed for WS2812 LED strip,
@@ -115,6 +116,13 @@ void rainbow_pattern(uint32_t *pattern_array, uint len, uint t)
         // pattern_array[i] = colour_wheel((t + 10 * i) * 3);
     }
 }
+void Shartur(uint32_t *pattern_array, uint len, uint t)
+{
+    for (int i = 0; i < len; ++i)
+    {
+        pattern_array[i] = (t + i * i) & 0xFFFFFF;
+    }
+}
 
 typedef void (*pattern)(uint32_t *light_array, uint len, uint t);
 const struct patternType
@@ -126,8 +134,8 @@ const struct patternType
 } pattern_table[] = {
     {block_colour_pattern, "Solid Colour", 1000000, 1000000},
     {rainbow_pattern, "Moving Rainbow!", 1000000, 1000000},
-};
-const int pattern_count = 2;
+    {Shartur, "Wtf", 1000000, 1000000}};
+const int pattern_count = 3;
 
 // Scales the see-saw wave
 // x_M and t_M are the max values of x, t
@@ -212,9 +220,9 @@ uint32_t difference(int32_t a, int32_t b)
 // Main program
 int main()
 {
-// stdio_init_all();
+    // stdio_init_all();
 
-// The onboard LED is used for testing
+    // The onboard LED is used for testing
     gpio_init(25);
     gpio_set_dir(25, GPIO_OUT);
     gpio_put(25, 0);
@@ -267,9 +275,9 @@ int main()
 
     // Call this once to start things off and then interrupts will start it up again
     // Want to change it so things happen in the loop below
-    //dma_handler();
+    // dma_handler();
 
-    //static uint32_t light_array[WS2812_LED_COUNT];
+    // static uint32_t light_array[WS2812_LED_COUNT];
     static uint32_t pattern_array[WS2812_LED_COUNT];
 
     static uint32_t phasing_wave[WS2812_LED_COUNT];
@@ -296,9 +304,11 @@ int main()
 
         // Check for button presses
         bool button_state = !gpio_get(BUTTON_GPIO_pin);
-        if (button_pressed != button_state) {
+        if (button_pressed != button_state)
+        {
             button_pressed = button_state;
-            if (button_pressed) {
+            if (button_pressed)
+            {
                 active_pattern = (active_pattern + 1) % pattern_count;
             }
         }
@@ -335,7 +345,6 @@ int main()
         sem_acquire_blocking(&reset_delay_complete_sem);
         // Set the read address of the DMA, and trigger it to start
         dma_channel_set_read_addr(dma_chan, &pattern_array, true);
-
 
         // Uncomment to flash the pico's led when on
         // gpio_put(25, ((t / 512) % 3) <= gpio_get(PIR_GPIO_pin));
