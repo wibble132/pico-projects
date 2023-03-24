@@ -1,7 +1,6 @@
 
 // #include <stdio.h>
 
-#include "pico/stdlib.h"
 #include "pico/sem.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
@@ -52,23 +51,15 @@
 // 1 - Rainbow
 #define ACTIVE_PATTERN 1
 
-#define BLOCK_COLOUR 0xA0C08000 // White
-// #define BLOCK_COLOUR 0x08000000 // Green
-
-// TODO use the second core to work out the pattern to be displayed
-// -- Is this even worth it? Maybe if I have some complicated pattern that takes 2 'frames' to create the pattern
-//    But unlikely to be done
-//    What would the first core do in the wait time though?
-//    Maybe if each core does half of the light calculations?
-//    Seems like by that point you should just optimise a bit, or have a lower 'framerate'
-// -- Might want something completely different running on the other core, at which point you would
-//    want this to run on a single one?
-
-// TODO Button to change the pattern/style00
 // TODO Display information on the LCD screen
 //     - Use second PIO to run the txuart for it
 //     - See .\lcd_uart\lcd_uart.c for basic example code
 //     - Display current style & brightness (2 rows :) )
+// TODO Once display added, use 2 buttons & potentio to change settings
+//     - e.g. live updates of brightness
+//     -      changing the constant colour
+//     -      changing timings within the patterns (e.g. rainbow speed)
+//     - this would make it much easier to create nice patterns, instead of having to recompile each time
 
 // Properties of phasing
 // (the animation of the lights turning on and off)
@@ -85,82 +76,26 @@ int dma_chan;
 // And slows down the patterns
 static semaphore_t reset_delay_complete_sem;
 
-static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b)
-{
-    return ((uint32_t)(r) << 16) |
-           ((uint32_t)(g) << 24) |
-           ((uint32_t)(b) << 8);
-}
-
-// TODO add more patterns
-void block_colour_pattern(uint32_t *pattern_array, uint len, uint t)
-{
-    for (int i = 0; i < len; ++i)
-    {
-        pattern_array[i] = BLOCK_COLOUR;
-    }
-}
-
-static inline uint32_t colour_wheel(uint8_t pos)
-{
-    return pos < 85 ? urgb_u32(pos * 3, 255 - pos * 3, 0) : pos < 170 ? urgb_u32(255 - (pos - 85) * 3, 0, (pos - 85) * 3)
-                                                                      : urgb_u32(0, (pos - 170) * 3, 255 - (pos - 170) * 3);
-}
-void rainbow_pattern(uint32_t *pattern_array, uint len, uint t)
-{
-    for (int i = 0; i < len; ++i)
-    {
-        // Don't need to worry if values>255, as colour_wheel only takes uint8, so it gets cropped
-        // Mess about with multipliers here
-        pattern_array[i] = colour_wheel((t + 5 * i) >> 2);
-        // pattern_array[i] = colour_wheel((t + 10 * i) * 3);
-    }
-}
-void Shartur(uint32_t *pattern_array, uint len, uint t)
-{
-    for (int i = 0; i < len; ++i)
-    {
-        pattern_array[i] = (t + i * i) & 0xFFFFFF;
-    }
-}
-
-typedef void (*pattern)(uint32_t *light_array, uint len, uint t);
-const struct patternType
-{
-    pattern pat;
-    const char *name;
-    uint64_t active_delay_us;
-    uint64_t passive_delay_us;
-} pattern_table[] = {
-    {block_colour_pattern, "Solid Colour", 1000000, 1000000},
-    {rainbow_pattern, "Moving Rainbow!", 1000000, 1000000},
-    {Shartur, "Wtf", 1000000, 1000000}};
-const int pattern_count = 3;
-
 // Scales the see-saw wave
 // x_M and t_M are the max values of x, t
 // See https://www.desmos.com/calculator/an3ayahnek for graph of what happens in these two functions
-static inline uint32_t phasing_f(uint32_t x, uint32_t t, uint32_t x_M, uint32_t t_M)
-{
-    if (t <= t_M / 2)
-    {
-        return ((uint32_t)255 * 2 * t * x) / (x_M * t_M);
+static inline uint32_t phasing_f(uint32_t x, uint32_t t, uint32_t x_M, uint32_t t_M) {
+    if (t <= t_M / 2) {
+        return ((uint32_t) 255 * 2 * t * x) / (x_M * t_M);
     } // t >= t_M / 2
-    return 255 - ((uint32_t)255 * 2 * (t_M - t) * (x_M - x)) / (x_M * t_M);
+    return 255 - ((uint32_t) 255 * 2 * (t_M - t) * (x_M - x)) / (x_M * t_M);
 }
 
 // Scales a see-saw wave such that it looks cool.
-// Effect isn't that noticible and it kinda looks like it all fades in at once
-void add_phasing(uint32_t *phase_wave, uint32_t *pattern_array, uint32_t length, uint32_t phasing_status, uint16_t brightness)
-{
+// Effect isn't that noticeable and it kinda looks like it all fades in at once
+void add_phasing(uint32_t *phase_wave, uint32_t *pattern_array, uint32_t length, uint32_t phasing_status,
+                 uint16_t brightness) {
     // const float conversion_factor = MAX_BRIGHTNESS / (1 << 12);
     // ADC has some "wobble" in the reading causing the lights to flicker slightly
     // Not the best....
     // uint16_t adc_value = adc_read();//1<<9;
-    for (int i = 0; i < WS2812_LED_COUNT; ++i)
-    {
-        if (phasing_status == 0)
-        {
+    for (int i = 0; i < length; ++i) {
+        if (phasing_status == 0) {
             pattern_array[i] = 0;
             continue;
         }
@@ -189,13 +124,12 @@ void add_phasing(uint32_t *phase_wave, uint32_t *pattern_array, uint32_t length,
         // assert(g <= MAX_BRIGHTNESS);
         // assert(b <= MAX_BRIGHTNESS);
 
-        pattern_array[i] = urgb_u32(r, g, b);
+        pattern_array[i] = urgb_u32((uint8_t) r, (uint8_t) g, (uint8_t) b);
     }
 }
 
 // Time has passed, release the sem so more data can be sent to the lights
-int64_t release_reset_delay_sem(alarm_id_t id, void *user_data)
-{
+int64_t release_reset_delay_sem(alarm_id_t id, void *user_data) {
     sem_release(&reset_delay_complete_sem);
     return 0;
 }
@@ -204,22 +138,19 @@ int64_t release_reset_delay_sem(alarm_id_t id, void *user_data)
 // Need to wait for the reset time of the WS2812 LEDs before we send the next set of colours
 // should be able to work with as little as 50us ? (https://cdn-shop.adafruit.com/datasheets/WS2812B.pdf)
 // Don't need to go that fast though, so use 500 for now.
-void new_dma_handler()
-{
+void new_dma_handler() {
     dma_hw->ints0 = 1u << dma_chan;
     add_alarm_in_us(4000, release_reset_delay_sem, NULL, true);
 }
 
 // Finds the difference between two integers
 // is equivalent to abs( a-b )
-uint32_t difference(int32_t a, int32_t b)
-{
+uint32_t difference(int32_t a, int32_t b) {
     return (a > b) ? a - b : b - a;
 }
 
 // Main program
-int main()
-{
+int main() {
     // stdio_init_all();
 
     // The onboard LED is used for testing
@@ -262,7 +193,7 @@ int main()
     dma_channel_configure(dma_chan,
                           &c,
                           &pio0_hw->txf[0], // write address
-                          NULL,             // Don't provide a read adress yet
+                          NULL,             // Don't provide a read address yet
                           WS2812_LED_COUNT, // Write to each LED, then stop and interrupt
                           false);           // Don't start yet
 
@@ -281,11 +212,11 @@ int main()
     static uint32_t pattern_array[WS2812_LED_COUNT];
 
     static uint32_t phasing_wave[WS2812_LED_COUNT];
-    for (signed int i = 0; i < WS2812_LED_COUNT; ++i)
-    {
+    for (signed int i = 0; i < WS2812_LED_COUNT; ++i) {
         // ABS( MOD( x-x_0, 2x_M) - x_M ) gives a see-saw wave with required properties
         // Used in the phasing functions
-        phasing_wave[i] = difference((i + (PHASING_DISTANCES - PHASING_OFFSET)) % (2 * PHASING_DISTANCES), PHASING_DISTANCES);
+        phasing_wave[i] = difference((i + (PHASING_DISTANCES - PHASING_OFFSET)) % (2 * PHASING_DISTANCES),
+                                     PHASING_DISTANCES);
     }
 
 #ifdef PIR_GPIO_pin
@@ -299,31 +230,27 @@ int main()
 
     sem_init(&reset_delay_complete_sem, 1, 1);
 
-    while (true)
-    {
+    while (true) {
 
         // Check for button presses
         bool button_state = !gpio_get(BUTTON_GPIO_pin);
-        if (button_pressed != button_state)
-        {
+        if (button_pressed != button_state) {
             button_pressed = button_state;
-            if (button_pressed)
-            {
+            if (button_pressed) {
                 active_pattern = (active_pattern + 1) % pattern_count;
             }
         }
         gpio_put(25, active_pattern != 0);
 
+        // Update the light's pattern
         pattern_table[active_pattern].pat(pattern_array, WS2812_LED_COUNT, t);
 
+        // Get brightness from PIR and potentiometer
 #ifdef PIR_GPIO_pin
-        if (gpio_get(PIR_GPIO_pin))
-        {
+        if (gpio_get(PIR_GPIO_pin)) {
             if (phasing_status < PHASING_PHASE_MAX)
                 phasing_status += PHASING_PHASE_STEP;
-        }
-        else
-        {
+        } else {
             if (phasing_status > 0)
                 phasing_status -= PHASING_PHASE_STEP;
         }
@@ -331,15 +258,13 @@ int main()
 
         uint16_t potentiometer_new = adc_read();
         if (potentiometer_new < potentiometer_value - POTENTIOMETER_wobble ||
-            potentiometer_new > potentiometer_value + POTENTIOMETER_wobble)
-        {
+            potentiometer_new > potentiometer_value + POTENTIOMETER_wobble) {
             potentiometer_value = potentiometer_new;
         }
 
         // add_phasing(phasing_wave, pattern_array, WS2812_LED_COUNT, phasing_status, 1 << 9);
         add_phasing(phasing_wave, pattern_array, WS2812_LED_COUNT, phasing_status, potentiometer_value);
 
-        // gpio_put(25, (t%2)!=0);
 
         // Acquire a permit to confirm that there has been enough time since the last showing of lights
         sem_acquire_blocking(&reset_delay_complete_sem);
@@ -349,6 +274,5 @@ int main()
         // Uncomment to flash the pico's led when on
         // gpio_put(25, ((t / 512) % 3) <= gpio_get(PIR_GPIO_pin));
 
-        ++t;
     }
 }

@@ -1,77 +1,77 @@
 
 #include "pico/stdlib.h"
+#include "colours.h"
+
+inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t) (r) << 16) |
+           ((uint32_t) (g) << 24) |
+           ((uint32_t) (b) << 8);
+}
 
 
-uint32_t hslToRgb(uint32_t hsl) {
-    uint8_t h = hsl >> 16;
-    uint8_t s = hsl >> 8;
-    uint8_t l = hsl;
+uint32_t hue_urgb(uint32_t p, uint32_t q, uint8_t t) {
+    if (t < 85) return p + (((q - p) * t) >> 8);
+    if (t < 170) return q;
+    return p + (((q - p) * (255 - t)) >> 8);
+}
 
-    uint8_t c = (255 - abs(2 * l - 255)) * s / 255;
-    uint8_t x = c * (255 - abs((h / 60) % 2 - 1)) / 255;
-    uint8_t m = l - c / 2;
+uint32_t uhsl_u32(uint8_t h, uint8_t s, uint8_t l) {
 
     uint8_t r, g, b;
-    if (h < 60) {
-        r = c;
-        g = x;
-        b = 0;
-    } else if (h < 120) {
-        r = x;
-        g = c;
-        b = 0;
-    } else if (h < 180) {
-        r = 0;
-        g = c;
-        b = x;
-    } else if (h < 240) {
-        r = 0;
-        g = x;
-        b = c;
-    } else if (h < 300) {
-        r = x;
-        g = 0;
-        b = c;
+    if (s == 0) {
+        r = g = b = l;
     } else {
-        r = c;
-        g = 0;
-        b = x;
+        uint32_t q = l < 128 ? (l * (256 + s)) >> 8 : l + s - ((l * s) >> 8);
+        uint32_t p = 2 * l - q;
+        r = hue_urgb(p, q, h + 85);
+        g = hue_urgb(p, q, h);
+        b = hue_urgb(p, q, h - 85);
     }
-
-    return (r + m) << 16 | (g + m) << 8 | (b + m);
+    return urgb_u32(r, g, b);
 }
 
-uint8_t hue2rgb(p, q, t)
-{
-    if (t < 0)
-        t += 1;
-    if (t > 1)
-        t -= 1;
-    if (t < 1 / 6)
-        return p + (q - p) * 6 * t;
-    if (t < 1 / 2)
-        return q;
-    if (t < 2 / 3)
-        return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
+void block_colour_pattern(uint32_t *light_array, uint len, uint t) {
+    for (int i = 0; i < len; i++) {
+        light_array[i] = BLOCK_COLOUR;
+    }
 }
 
-uint32_t hslToRgb(uint8_t h, uint8_t s, uint8_t l)
-{
-    uint8_t r, g, b;
-
-    if (s == 0)
-    {
-        r = g = b = l; // achromatic
+void rainbow_pattern(uint32_t *light_array, uint len, uint t) {
+    for (int i = 0; i < len; i++) {
+        light_array[i] = uhsl_u32((t + i / 8) >> 5, 255, 128);
     }
-    else
-    {
-        uint8_t q = l <= 127 ? l * (255 + s) : l + s - l * s;
-        uint8_t p = 2 * l - q;
-        r = hue2rgb(p, q, h + 85);
-        g = hue2rgb(p, q, h);
-        b = hue2rgb(p, q, h - 85);
-    }
-
-    return (r) << 16 | (g) << 8 | (b);
 }
+
+void Shartur(uint32_t *light_array, uint len, uint t) {
+    for (int i = 0; i < len; ++i) {
+        light_array[i] = (t + i * i) & 0xFFFFFF;
+    }
+}
+
+// WIP
+void colour_fade_pattern(uint32_t *light_array, uint len, uint t) {
+
+    uint8_t h1 = COLOUR_FADE_HUE_1;
+    uint8_t h2 = COLOUR_FADE_HUE_2;
+
+    for (int i = 0; i < len; ++i) {
+
+        // Interpolate between h1 and h2 using i as the index and t as time
+        uint32_t x = (uint32_t) i * t;
+        // 120 * sin(x) + 120
+        uint32_t sx = 120 * x - (x * x * x) / 6;
+
+        uint8_t h = h1 + ((h2 - h1) * i) / len;
+
+        uint8_t hue = (t / 1000 + i / 250) % 255;
+        light_array[i] = uhsl_u32(hue, 255, 128);
+    }
+}
+
+struct colour_pattern pattern_table[] = {
+        {block_colour_pattern, "Solid Colour",    1000000, 1000000},
+        {rainbow_pattern,      "Moving Rainbow!", 1000000, 1000000},
+        {Shartur,              "Wtf",             1000000, 1000000},
+//        {colour_fade_pattern,  "Colour Fade",     1000000, 1000000}
+};
+int pattern_count = 3;
